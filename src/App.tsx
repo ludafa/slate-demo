@@ -1,4 +1,4 @@
-import { useDebounceFn } from 'ahooks';
+import nlp from 'compromise';
 import { diffWords } from 'diff';
 import { useRef } from 'react';
 import {
@@ -10,10 +10,19 @@ import {
   Point,
   Range,
 } from 'slate';
+import { withHistory } from 'slate-history';
+
+type GrammarRecommend = {
+  correction: string;
+};
 
 type CustomElement = { type: 'paragraph'; children: CustomText[] };
-type CustomText = { text: string; underline?: boolean };
-type CustomRange = { anchor: Point; focus: Point; underline: true };
+type CustomText = { text: string; grammar?: GrammarRecommend[] };
+type CustomRange = {
+  anchor: Point;
+  focus: Point;
+  grammar?: GrammarRecommend[];
+};
 
 declare module 'slate' {
   interface CustomTypes {
@@ -32,41 +41,46 @@ import {
   withReact,
 } from 'slate-react';
 
-const original = `Yesterday moring, You are at the store. when you saw a good deal on milk, bread, and eggs, so you bought them. But they where expired. Your are very upst. Could not believe they sell old products?`;
-const corrected = `Yesterday morning, you were at the store when you saw a good deal on milk, bread, and eggs, so you bought them. But they were expired. You are very upset. You could not believe they sell old products.`;
-// const diff = diffWords(original, corrected);
-
-const map = {
-  [original as string]: corrected as string,
-} as const;
+const original =
+  'Yesterday moring, You are at the store. when you saw a good deal on milk, bread, and eggs, so you bought them. But they where expired. Your are very upst. Could not believe they sell old products?';
 
 const initialValue = [
   {
     type: 'paragraph',
     children: [
       {
-        text: 'Yesterday moring, You are at the store. when you saw a good deal on milk, bread, and eggs, so you bought them. But they where expired. Your are very upst. Could not believe they sell old products?',
+        text: original,
       },
     ],
   },
 ] satisfies Descendant[];
 
-console.log(JSON.stringify(initialValue, null, 2));
+console.log(nlp(original).sentences());
 
 const Leaf = ({ attributes, children, leaf }: RenderLeafProps) => {
-  if (leaf.underline) {
+  if (leaf.grammar) {
     children = <u>{children}</u>;
   }
 
   return <span {...attributes}>{children}</span>;
 };
 
+const map = new Map([
+  [
+    '0',
+    `Yesterday morning, you were at the store when you saw a good deal on milk, bread, and eggs, so you bought them. But they were expired. You are very upset. You could not believe they sell old products.`,
+  ],
+]);
+
 const decorate = ([node, path]: NodeEntry) => {
   if (!Element.isElementType(node, 'paragraph')) {
     return [];
   }
+
+  console.log('paragraph path', node, path);
+
   const original = node.children.map((node) => node.text).join('');
-  const corrected = map[original];
+  const corrected = map.get(path.join('.'));
 
   const ranges: Range[] = [];
 
@@ -75,6 +89,7 @@ const decorate = ([node, path]: NodeEntry) => {
   }
 
   const diff = diffWords(original, corrected);
+
   let offset = 0;
   for (let i = 0, len = diff.length; i < len; i++) {
     const item = diff[i];
@@ -82,9 +97,19 @@ const decorate = ([node, path]: NodeEntry) => {
       ranges.push({
         anchor: { path, offset },
         focus: { path, offset: offset + item.value.length },
-        underline: true,
+        grammar: [],
       });
+      offset += item.value.length;
+      continue;
     }
+
+    if (item.added) {
+      ranges[ranges.length - 1].grammar?.push({
+        correction: item.value,
+      });
+      continue;
+    }
+
     offset += item.value.length;
   }
 
@@ -92,12 +117,12 @@ const decorate = ([node, path]: NodeEntry) => {
 };
 
 export default function App() {
-  const editorRef = useRef(withReact(createEditor()));
+  const editorRef = useRef(withReact(withHistory(createEditor())));
   return (
     <div className="w-screen-md prose prose-truegray mx-auto text-base">
       <h1 className="">A slate writer demo</h1>
       <Slate editor={editorRef.current} initialValue={initialValue}>
-        <Editable renderLeaf={Leaf} decorate={decorate} />
+        <Editable className="p-2" renderLeaf={Leaf} decorate={decorate} />
       </Slate>
     </div>
   );
